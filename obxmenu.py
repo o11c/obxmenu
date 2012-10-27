@@ -10,7 +10,7 @@ import xdg.Menu
 
 def help(exe):
     print('Usage: %s {--pipe|--static} [--write] [--reconfigure]' % exe)
-    print('Use --pipe makes a dynamic menu, or --static for a static one')
+    print('Use --pipe for a dynamic menu, or --static for a static one')
     print('Use --write to write to ~/.config/openbox/menu.xml')
     print('Use --reconfigure to update a running instance of openbox')
     print('Note that --pipe --write is different than --pipe')
@@ -56,7 +56,7 @@ def generate_static():
     print('<?xml version="1.0" encoding="UTF-8"?>')
     print('<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/">')
     print('    <menu id="root-menu" label="obxmenu">')
-    generate_main(xdg.Menu.parse(), 2)
+    generate_menu(xdg.Menu.parse(), 2)
     print('    </menu>')
     print('</openbox_menu>')
 
@@ -68,14 +68,14 @@ def generate_pipe_instructions():
 
 def generate_pipe_contents():
     print('<openbox_pipe_menu>')
-    generate_main(xdg.Menu.parse(), 1)
+    generate_menu(xdg.Menu.parse(), 1)
     print('</openbox_pipe_menu>')
 
-def generate_main(menu, level):
+def generate_menu(menu, level):
     for entry in menu.Entries:
         if isinstance(entry, xdg.Menu.Menu):
             print('    ' * level + str(entry))
-            generate_main(entry, level+1)
+            generate_menu(entry, level+1)
         elif isinstance(entry, xdg.Menu.MenuEntry):
             print('    ' * level + str(entry))
         else:
