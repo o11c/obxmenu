@@ -17,6 +17,51 @@ import xdg.Menu
 class InvalidXdgExecEror(Exception):
     pass
 
+def expand_field_code(f, is_word, name, icon, desktop_file):
+    if f == '%':
+        yield '%'
+    elif f == 'F' or f == 'U':
+        if not is_word:
+            raise InvalidXdgExecEror('%F or %U not own argument')
+    elif f in 'fudDnNvm':
+        pass # file, url, and deprecated arguments just get removed
+    elif f == 'i':
+        if not is_word:
+            # only place I raise that is not mentioned in the spec
+            raise InvalidXdgExecEror("don't know how to handle %i not in own argument")
+        if icon:
+            yield '--icon'
+            yield icon
+        # else expand to nothing
+    elif f == 'c':
+        yield name
+    elif f == 'k':
+        # desktop_file can be empty, should I do this?
+        # if not s and not desktop_file and (i+1 == ll or line[i+1] == ' '):
+        #     yield ''
+        yield desktop_file
+    else:
+        raise InvalidXdgExecEror('field code: ' + line[i+1])
+
+def expand_field_codes(word, name, icon, desktop_file):
+    if len(word) == 2 and word[0] == '%':
+        for x in expand_field_code(word[1], True, name, icon, desktop_file):
+            yield x
+        return
+    r = ''
+    is_code = False
+    for c in word:
+        if is_code:
+            # this loop will be executed 0 or 1 time.
+            for x in expand_field_code(c, False, name, icon, desktop_file):
+                r += x
+            is_code = False
+        elif c == '%':
+            is_code = True
+        else:
+            r += c
+    yield r
+
 def xdg_exec_split(line, name, icon, desktop_file, RESERVED=' \t\n"\'\\><~|&;$*?#()`', BACKSLASH='"`$\\'):
     line = line.strip()
     ll = len(line)
@@ -28,7 +73,8 @@ def xdg_exec_split(line, name, icon, desktop_file, RESERVED=' \t\n"\'\\><~|&;$*?
             raise InvalidXdgExecEror('not ascii')
         elif c == ' ':
             if s: # allow multiple adjacent spaces
-                yield s
+                for x in expand_field_codes(s, name, icon, desktop_file):
+                    yield x
                 s = ''
         elif c == '"':
             # currently allowing quotes in places other than begin and end,
@@ -45,38 +91,14 @@ def xdg_exec_split(line, name, icon, desktop_file, RESERVED=' \t\n"\'\\><~|&;$*?
                     raise InvalidXdgExecEror('no backslash: ' + c)
                 s += c
                 i += 1
-            i += 1
+            # line[i] == '"'
         elif c in RESERVED:
             raise InvalidXdgExecEror('reserved character: ' + c)
-        elif c == '%':
-            f = line[i+1]
-            if f == '%':
-                s += '%'
-            elif f == 'F' or f == 'U':
-                if s or (i+1 < ll and line[i+1] != ' '):
-                    raise InvalidXdgExecEror('%F or %U not own argument')
-            elif f in 'fudDnNvm':
-                pass # file, url, and deprecated arguments just get removed
-            elif f == 'i':
-                if s:
-                    # only place I raise that is not mentioned in the spec
-                    raise InvalidXdgExecEror('don\'t know how to handle %i not in own argument')
-                if icon:
-                    yield '--icon'
-                    yield icon
-            elif f == 'c':
-                s += name
-            elif f == 'k':
-                # desktop_file can be empty, should I do this?
-                # if not s and not desktop_file and (i+1 == ll or line[i+1] == ' '):
-                #     yield ''
-                s += desktop_file
-            else:
-                raise InvalidXdgExecEror('field code: ' + line[i+1])
         else:
             s += c
         i += 1
-    yield s
+    for x in expand_field_codes(s, name, icon, desktop_file):
+        yield x
 
 def help(exe):
     print('Usage: %s {--pipe|--static} [--write] [--reconfigure]' % exe)
@@ -85,8 +107,12 @@ def help(exe):
     print('Use --reconfigure to update a running instance of openbox')
     print('Note that --pipe --write is different than --pipe')
     print('')
-    print('If you just want it to work, do:')
+    print('If you just want it to work, do one of:')
     print('%s --pipe --write --reconfigure' % exe)
+    print('%s --static --write --reconfigure' % exe)
+    print('')
+    print('Note that using a pipe menu can be very slow,')
+    print('and openbox may give up and show an error')
 
 def main(argv):
     exe = argv[0]
@@ -113,13 +139,16 @@ def main(argv):
         generate_static()
     elif pipe:
         if write:
-            generate_pipe_instructions()
+            generate_pipe_instructions(exe)
         else:
             generate_pipe_contents()
     else:
         if not reconfigure:
             exit('Must specify one of --static and --pipe')
     if reconfigure:
+        sys.stdout.flush()
+        # Why is this necessary?
+        os.fsync(sys.stdout.fileno())
         os.execvp('openbox', ['openbox', '--reconfigure'])
 
 def generate_static():
@@ -130,10 +159,10 @@ def generate_static():
     print('    </menu>')
     print('</openbox_menu>')
 
-def generate_pipe_instructions():
+def generate_pipe_instructions(exe):
     print('<?xml version="1.0" encoding="UTF-8"?>')
     print('<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/">')
-    print('    <menu id="root-menu" label="obxmenu" execute="obxmenu --pipe" />')
+    print('    <menu id="root-menu" label="obxmenu" execute="%s --pipe" />' % os.path.realpath(exe))
     print('</openbox_menu>')
 
 def generate_pipe_contents():
@@ -157,6 +186,10 @@ def entry2str(entry):
 
 def generate_menu(menu, level):
     for entry in menu.Entries:
+        if entry.Show is not True:
+            # Show may be True, False, or various strings
+            # The only case we want to display it is True
+            continue
         if isinstance(entry, xdg.Menu.Menu):
             # TODO: handle these?
             # inline = entry.Layout.inline == 'true'
@@ -176,7 +209,7 @@ def generate_menu(menu, level):
             try:
                 ex = list(xdg_exec_split(exec_, name, icon, desktop_file))
             except Exception as e:
-                print('    ' * level + '<separator label=": %s has invalid Exec"/>' % str(de))
+                print('    ' * level + '<separator label=": %s has invalid Exec"/>' % name)
                 print('    ' * level + '<!-- Exec=%s -->' % exec_)
                 print('    ' * level + '<!-- caught %r -->' % e)
                 # traceback.print_exc()
@@ -184,6 +217,8 @@ def generate_menu(menu, level):
                 if de.getTerminal():
                     ex = ['xterm', '-e'] + ex
                 exs = ' '.join(pipes.quote(el) for el in ex)
-                print('    ' * level + '<item label="%s" icon="%s"><action name="Execute"><execute>%s</execute></action></item>' % (str(de), icon, exs))
+                print('    ' * level + '<item label="%s" icon="%s"><action name="Execute"><execute>%s</execute></action></item>' % (name, icon, exs))
+        elif isinstance(entry, xdg.Menu.Separator):
+            print('    ' * level + '<separator/>')
         else:
             print('    ' * level + '<!-- Unknown entry type: ' + str(type(entry)) + ': ' + str(entry))
